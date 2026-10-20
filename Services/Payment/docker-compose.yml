@@ -1,0 +1,60 @@
+name: payments
+
+services:
+  payment-db:
+    image: postgres:17-alpine
+    container_name: payment-db
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: payments_user
+      POSTGRES_PASSWORD: payments_dev_password
+    ports:
+      # Host 5434 -> container 5432. 5432 and 5433 are already taken
+      # (local PostgreSQL, and the Order service's order-db).
+      - "5434:5432"
+    volumes:
+      - payment-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments_user -d payments"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  payment-api:
+    build:
+      context: .
+      dockerfile: src/Payments.Api/Dockerfile
+    container_name: payment-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      # Inside the Docker network the API reaches the database by service name
+      # and the container's OWN port (5432) - never localhost or the host port 5434.
+      ConnectionStrings__PaymentsDb: "Host=payment-db;Port=5432;Database=payments;Username=payments_user;Password=payments_dev_password"
+      # Reach the broker by its service name and its OWN port (5672), over the
+      # shared network below. OrderConfirmedConsumer connects using this.
+      RabbitMq__HostName: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__UserName: "app_user"
+      RabbitMq__Password: "app_dev_password"
+    ports:
+      # Host 8082 -> container 8080, following on from order-api's 8081.
+      - "8082:8080"
+    depends_on:
+      payment-db:
+        condition: service_healthy
+    networks:
+      # "default" keeps reaching payment-db, same as before this existed.
+      # microservices-network is how this service reaches "rabbitmq" - that
+      # container lives in the shared Infrastructure compose project, on
+      # its own network that this one can't see without this attachment.
+      - default
+      - microservices-network
+    restart: unless-stopped
+
+networks:
+  microservices-network:
+    external: true
+
+volumes:
+  payment-db-data:

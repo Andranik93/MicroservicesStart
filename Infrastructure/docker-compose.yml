@@ -1,0 +1,49 @@
+name: platform
+
+# Shared infrastructure used by more than one service - owned by none of them.
+# RabbitMQ lives here, not inside Order's or Payment's own docker-compose.yml,
+# the same way neither service's database lives in this file.
+
+services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: app_user
+      RABBITMQ_DEFAULT_PASS: app_dev_password
+    ports:
+      - "5672:5672"   # AMQP - what services actually connect on
+      - "15672:15672" # management UI: http://localhost:15672
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      # The same network Order and Payment's own compose files attach their
+      # API containers to, so both can reach "rabbitmq" by name.
+      - microservices-network
+    restart: unless-stopped
+
+  mailpit:
+    # A fake SMTP server with a web inbox - nothing it "sends" leaves this
+    # machine. Email.Api connects to it over plain SMTP, same as it would
+    # connect to a real provider; the only difference is what's on the
+    # other end. Dev-only stand-in, same spirit as FakePaymentGatewaySimulator.
+    image: axllent/mailpit
+    container_name: mailpit
+    ports:
+      - "1025:1025" # SMTP - what Email.Api connects to
+      - "8025:8025" # web inbox: http://localhost:8025
+    networks:
+      - microservices-network
+    restart: unless-stopped
+
+networks:
+  microservices-network:
+    external: true
+
+volumes:
+  rabbitmq-data:

@@ -1,0 +1,63 @@
+name: emails
+
+services:
+  email-db:
+    image: postgres:17-alpine
+    container_name: email-db
+    environment:
+      POSTGRES_DB: emails
+      POSTGRES_USER: emails_user
+      POSTGRES_PASSWORD: emails_dev_password
+    ports:
+      # Host 5435 -> container 5432. 5432/5433/5434 are already taken
+      # (local PostgreSQL, order-db, payment-db).
+      - "5435:5432"
+    volumes:
+      - email-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U emails_user -d emails"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  email-api:
+    build:
+      context: .
+      dockerfile: src/Emails.Api/Dockerfile
+    container_name: email-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__EmailsDb: "Host=email-db;Port=5432;Database=emails;Username=emails_user;Password=emails_dev_password"
+      RabbitMq__HostName: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__UserName: "app_user"
+      RabbitMq__Password: "app_dev_password"
+      # Reach order-api by its service name and its OWN port (8080) - the
+      # read-only enrichment call IOrderServiceClient makes.
+      Services__OrderApi: "http://order-api:8080"
+      # Reach Mailpit by its service name and its OWN SMTP port (1025).
+      Smtp__Host: "mailpit"
+      Smtp__Port: "1025"
+    ports:
+      # Host 8083 -> container 8080, following on from order-api (8081)
+      # and payment-api (8082).
+      - "8083:8080"
+    depends_on:
+      email-db:
+        condition: service_healthy
+    networks:
+      # "default" keeps reaching email-db, same as before this existed.
+      # microservices-network is how this service reaches "rabbitmq",
+      # "order-api", and "mailpit" - all three live outside this compose
+      # project.
+      - default
+      - microservices-network
+    restart: unless-stopped
+
+networks:
+  microservices-network:
+    external: true
+
+volumes:
+  email-db-data:

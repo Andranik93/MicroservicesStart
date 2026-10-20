@@ -1,0 +1,63 @@
+name: orders
+
+services:
+  order-db:
+    image: postgres:17-alpine
+    container_name: order-db
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: orders_user
+      POSTGRES_PASSWORD: orders_dev_password
+    ports:
+      # Host 5433 -> container 5432. Host 5432 is already used by a local PostgreSQL.
+      - "5433:5432"
+    volumes:
+      - order-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orders_user -d orders"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  order-api:
+    build:
+      context: .
+      dockerfile: src/Orders.Api/Dockerfile
+    container_name: order-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      # Inside the Docker network the API reaches the database by service name
+      # and the container's OWN port (5432) - never localhost or the host port 5433.
+      # This overrides appsettings.Development.json's localhost connection string.
+      ConnectionStrings__OrdersDb: "Host=order-db;Port=5432;Database=orders;Username=orders_user;Password=orders_dev_password"
+      # Same idea: reach the broker by its service name and its OWN port (5672),
+      # over the shared network below - never localhost or its host port 5672
+      # as mapped on the HOST (same number, different thing - this is the
+      # container-to-container address, not the host-facing one).
+      RabbitMq__HostName: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__UserName: "app_user"
+      RabbitMq__Password: "app_dev_password"
+    ports:
+      # Host 8081 -> container 8080. Each future service (Payment, Email, ...)
+      # gets its own host port: 8082, 8083, and so on.
+      - "8081:8080"
+    depends_on:
+      order-db:
+        condition: service_healthy
+    networks:
+      # "default" keeps reaching order-db, same as before this service existed.
+      # microservices-network is how order-api reaches "rabbitmq" - that
+      # container lives in the shared Infrastructure compose project, on
+      # its own network that this one can't see without this attachment.
+      - default
+      - microservices-network
+    restart: unless-stopped
+
+networks:
+  microservices-network:
+    external: true
+
+volumes:
+  order-db-data:
